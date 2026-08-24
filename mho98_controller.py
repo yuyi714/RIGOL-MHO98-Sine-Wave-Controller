@@ -189,9 +189,9 @@ def load_waveform_groups(path: str):
             times = [index * interval for index in range(len(rows))]
         else:
             # Compatibility path for simple files containing only f, CH1 and CH2.
-            times = [index * (3.0 / frequency) / len(rows) for index in range(len(rows))]
+            times = [index * (5.0 / frequency) / len(rows) for index in range(len(rows))]
             assumptions.append(
-                f"{frequency:.12g} Hz 无时间列，按该组数据均匀覆盖 3 个周期处理"
+                f"{frequency:.12g} Hz 无时间列，按该组数据均匀覆盖 5 个周期处理"
             )
         groups[frequency] = (
             times,
@@ -221,37 +221,37 @@ def _linear_segment(
 def make_sweep_frequencies() -> list[float]:
     """Return 300 unique points across three piecewise-linear bands."""
     return (
-        _linear_segment(0.1, 10.0, 100, include_stop=False)
-        + _linear_segment(10.0, 100.0, 100, include_stop=False)
-        + _linear_segment(100.0, 500.0, 100, include_stop=True)
+        _linear_segment(0.1, 1.0, 100, include_stop=False)
+        + _linear_segment(1.0, 10.0, 100, include_stop=False)
+        + _linear_segment(10.0, 100.0, 100, include_stop=True)
     )
 
 
-def five_cycle_duration(frequency: float) -> float:
+def seven_cycle_duration(frequency: float) -> float:
     if frequency <= 0:
         raise ValueError("频率必须大于 0。")
-    return 5.0 / frequency
+    return 7.0 / frequency
 
 
 def sweep_timebase_preset(frequency: float) -> tuple[str, float]:
     """Return the fixed timebase used for each of the three sweep bands."""
     if frequency <= 0:
         raise ValueError("频率必须大于 0。")
+    if frequency < 1.0:
+        return "0.1–<1 Hz", 10.0
     if frequency < 10.0:
-        return "0.1–<10 Hz", 5.0
-    if frequency < 100.0:
-        return "10–<100 Hz", 0.05
-    return "100–500 Hz", 0.005
+        return "1–<10 Hz", 1.0
+    return "10–100 Hz", 0.1
 
 
-def extract_middle_three_cycles(
+def extract_middle_five_cycles(
     ch1: list[float],
     ch2: list[float],
     ch1_x_increment: float,
     ch2_x_increment: float,
     frequency: float,
 ) -> tuple[list[float], list[float], list[float], float]:
-    """Keep raw samples from cycles 2-4 of the newest five-cycle window."""
+    """Keep raw samples from cycles 2-6 of the newest seven-cycle window."""
     if len(ch1) < 2 or len(ch2) < 2:
         raise ValueError("示波器返回的波形点数不足。")
     if ch1_x_increment <= 0 or ch2_x_increment <= 0 or frequency <= 0:
@@ -263,29 +263,28 @@ def extract_middle_three_cycles(
         raise ValueError("CH1/CH2 的 XINCrement 不一致，无法在不插值的情况下对齐。")
 
     period = 1.0 / frequency
-    required_duration = 5.0 * period
-    # Capture starts after five real-time periods.  Because cycle 1 is
-    # intentionally discarded, the screen only has to contain the latest four
-    # periods to preserve cycles 2-4 completely.  This also tolerates the
-    # MHO98 screen returning e.g. 49.6 s for a nominal 50 s requirement.
-    minimum_visible_duration = 4.0 * period
+    required_duration = 7.0 * period
+    # Capture starts after seven real-time periods. Because cycle 1 is
+    # intentionally discarded, the screen only has to contain the latest six
+    # periods to preserve cycles 2-6 completely.
+    minimum_visible_duration = 6.0 * period
 
     def extract(values: list[float], increment: float):
         source_duration = (len(values) - 1) * increment
         if source_duration + increment < minimum_visible_duration:
             raise ValueError(
                 f"当前屏幕波形覆盖 {source_duration:.6g} s，"
-                f"完整保留第 2–4 周期至少需要覆盖 {minimum_visible_duration:.6g} s。"
+                f"完整保留第 2–6 周期至少需要覆盖 {minimum_visible_duration:.6g} s。"
                 "当前频段的预设时基未得到足够屏幕数据，请检查示波器时基模式。"
             )
-        five_cycle_start = source_duration - required_duration
-        keep_start = five_cycle_start + period
-        keep_stop = five_cycle_start + 4.0 * period
+        seven_cycle_start = source_duration - required_duration
+        keep_start = seven_cycle_start + period
+        keep_stop = seven_cycle_start + 6.0 * period
         start_index = max(0, math.ceil((keep_start - 1e-12) / increment))
         stop_index = min(len(values), math.ceil((keep_stop - 1e-12) / increment))
         selected = values[start_index:stop_index]
         point_times = [
-            (start_index + index) * increment - five_cycle_start
+            (start_index + index) * increment - seven_cycle_start
             for index in range(len(selected))
         ]
         return selected, point_times
@@ -296,7 +295,7 @@ def extract_middle_three_cycles(
     if count < 2:
         recommended_scale = 1.0 / frequency
         raise ValueError(
-            "中间 3 个周期内的原始波形点数不足。"
+            "中间 5 个周期内的原始波形点数不足。"
             f"当前点间隔约 {ch1_x_increment:.6g} s；"
             f"当前频段预设未生效；建议时基约 {recommended_scale:.6g} s/div 或更小。"
         )
@@ -545,7 +544,7 @@ class App(tk.Tk):
         self.native_resources: dict[str, str] = {}
         self.ch = tk.IntVar(value=1)
         self.freq = tk.DoubleVar(value=1000.0)
-        self.amp = tk.DoubleVar(value=2.0)
+        self.amp = tk.DoubleVar(value=5.0)
         self.output = tk.BooleanVar(value=False)
         self.sweep_running = False
         self.sweep_generation = 0
@@ -632,13 +631,13 @@ class App(tk.Tk):
         self.output_check = ttk.Checkbutton(f, text="启用输出", variable=self.output, command=self.set_output)
         self.output_check.grid(column=2, row=9, columnspan=2, sticky="w", **pad)
         ttk.Separator(f).grid(column=0, row=10, columnspan=4, sticky="ew", pady=8)
-        self.sweep_button = ttk.Button(f, text="开始扫频（0.1–500 Hz）", command=self.toggle_sweep)
+        self.sweep_button = ttk.Button(f, text="开始扫频（0.1–100 Hz）", command=self.toggle_sweep)
         self.sweep_button.grid(column=0, row=11, columnspan=2, sticky="ew", **pad)
-        ttk.Label(f, text="三段固定时基：5 s/div、50 ms/div、5 ms/div；仅在 10 Hz 和 100 Hz 边界切换。", wraplength=300).grid(column=2, row=11, columnspan=2, sticky="w", **pad)
+        ttk.Label(f, text="三段固定时基：10 s/div、1 s/div、100 ms/div；仅在 1 Hz 和 10 Hz 边界切换。", wraplength=300).grid(column=2, row=11, columnspan=2, sticky="w", **pad)
         ttk.Label(f, text="范围：2 mHz–100 MHz；幅度 2 mVpp–20 Vpp。高于 50 MHz 时最大 10 Vpp；50 Ω 负载时可用幅度会更低。", wraplength=510).grid(column=0, row=12, columnspan=4, sticky="w", **pad)
         preview = ttk.LabelFrame(f, text="正弦波扫频预览（设定值，非实际采样）", padding=8)
         preview.grid(column=0, row=13, columnspan=4, sticky="ew", padx=8, pady=(10, 5))
-        self.preview_text = tk.StringVar(value="0.1000 Hz | 2 Vpp | 5 周期 / 50 s")
+        self.preview_text = tk.StringVar(value="0.1000 Hz | 5 Vpp | 7 周期 / 70 s")
         ttk.Label(preview, textvariable=self.preview_text).grid(column=0, row=0, sticky="w")
         self.sweep_progress = ttk.Progressbar(
             preview, maximum=len(self.sweep_frequencies), length=230, mode="determinate"
@@ -653,7 +652,7 @@ class App(tk.Tk):
             highlightbackground="#506070",
         )
         self.preview_canvas.grid(column=0, row=1, columnspan=2, pady=(7, 0))
-        acquisition = ttk.LabelFrame(f, text="CH1 / CH2 扫频数据（每点仅保存第 2–4 周期）", padding=8)
+        acquisition = ttk.LabelFrame(f, text="CH1 / CH2 扫频数据（每点仅保存第 2–6 周期）", padding=8)
         acquisition.grid(column=0, row=14, columnspan=4, sticky="ew", padx=8, pady=(8, 5))
         self.acq_button = ttk.Button(acquisition, text="开始记录", command=self.toggle_acquisition)
         self.acq_button.grid(column=0, row=0, sticky="ew", padx=(0, 6))
@@ -662,7 +661,7 @@ class App(tk.Tk):
         self.clear_button = ttk.Button(acquisition, text="清空数据", command=self.clear_acquisition)
         self.clear_button.grid(column=2, row=0, sticky="ew", padx=6)
         self.acq_text = tk.StringVar(
-            value="尚未记录 | 每频点采集 5 周期，丢弃第 1 和第 5 周期"
+            value="尚未记录 | 每频点采集 7 周期，丢弃第 1 和第 7 周期"
         )
         ttk.Label(acquisition, textvariable=self.acq_text, wraplength=565).grid(
             column=0, row=1, columnspan=3, sticky="w", pady=(7, 4)
@@ -899,14 +898,14 @@ class App(tk.Tk):
         ):
             return
         period = 1.0 / frequency
-        five_cycles = five_cycle_duration(frequency)
+        seven_cycles = seven_cycle_duration(frequency)
         remaining = sum(
-            five_cycle_duration(value)
+            seven_cycle_duration(value)
             for value in self.sweep_frequencies[point_number - 1:]
         )
         self.set_status(
             f"扫频点 {point_number}/{len(self.sweep_frequencies)}：{frequency:.6g} Hz | "
-            f"周期 {period:.6g} s | 5 周期 {five_cycles:.6g} s；"
+            f"周期 {period:.6g} s | 7 周期 {seven_cycles:.6g} s；"
             f"{timebase_band} 段时基 {timebase_scale:.6g} s/div；"
             f"理论剩余 {int(remaining) // 60} 分 {int(remaining) % 60} 秒"
         )
@@ -935,7 +934,7 @@ class App(tk.Tk):
         if self.sweep_after_id is not None:
             self.after_cancel(self.sweep_after_id)
             self.sweep_after_id = None
-        self.sweep_button.configure(text="开始扫频（0.1–500 Hz）")
+        self.sweep_button.configure(text="开始扫频（0.1–100 Hz）")
         self.apply_button.configure(state="normal")
         self.ch1_button.configure(state="normal")
         self.ch2_button.configure(state="normal")
@@ -1047,7 +1046,7 @@ class App(tk.Tk):
         ):
             return
         elapsed = time.monotonic() - point_started_at
-        point_duration = five_cycle_duration(frequency)
+        point_duration = seven_cycle_duration(frequency)
         delay_ms = max(1, int((point_duration - elapsed) * 1000))
         self.acq_after_id = self.after(
             delay_ms,
@@ -1081,7 +1080,7 @@ class App(tk.Tk):
         def worker():
             try:
                 raw1, increment1, raw2, increment2 = self.inst.acquire_dual_frame()
-                values1, values2, point_times, sample_interval = extract_middle_three_cycles(
+                values1, values2, point_times, sample_interval = extract_middle_five_cycles(
                     raw1, raw2, increment1, increment2, frequency
                 )
             except Exception as exc:
@@ -1142,7 +1141,7 @@ class App(tk.Tk):
             return
         period = 1.0 / frequency
         cycle_numbers = [
-            min(4, max(2, math.floor((value + period * 1e-9) / period) + 1))
+            min(6, max(2, math.floor((value + period * 1e-9) / period) + 1))
             for value in point_times
         ]
         stored_times = [
@@ -1176,7 +1175,7 @@ class App(tk.Tk):
         self.save_button.configure(state="normal")
         self.acq_text.set(
             f"扫频点 {point_number}/{len(self.sweep_frequencies)} | {frequency:.6g} Hz | "
-            f"已保存周期 2–4：{len(ch1):,} 点 | "
+            f"已保存周期 2–6：{len(ch1):,} 点 | "
             f"原始间隔 {sample_interval:.6g} s"
         )
         self.sweep_after_id = self.after(1, self._run_sweep_point)
@@ -1264,7 +1263,7 @@ class App(tk.Tk):
         self.acq_file_path = None
         self.save_button.configure(state="disabled")
         self.acq_text.set(
-            "尚未记录 | 每频点采集 5 周期，丢弃第 1 和第 5 周期"
+            "尚未记录 | 每频点采集 7 周期，丢弃第 1 和第 7 周期"
         )
 
     def save_acquisition(self):
@@ -1521,7 +1520,7 @@ class App(tk.Tk):
         self.set_status("伯德图已保存：" + path)
 
     def update_wave_preview(self, frequency: float, amplitude: float, point: int | None = None):
-        """Draw exactly five periods; cycles 2-4 are the stored region."""
+        """Draw exactly seven periods; cycles 2-6 are the stored region."""
         canvas = self.preview_canvas
         canvas.delete("all")
         width = int(canvas["width"])
@@ -1530,11 +1529,11 @@ class App(tk.Tk):
         plot_width = width - left - right
         plot_height = height - top - bottom
         center_y = top + plot_height / 2
-        time_window = five_cycle_duration(frequency)
+        time_window = seven_cycle_duration(frequency)
 
         # Vertical divisions are cycle boundaries.
-        for cycle in range(6):
-            x = left + plot_width * cycle / 5
+        for cycle in range(8):
+            x = left + plot_width * cycle / 7
             canvas.create_line(x, top, x, top + plot_height, fill="#1e3a4d", dash=(2, 4))
             label_time = cycle / frequency
             canvas.create_text(x, height - 14, text=f"{label_time:.3g}s", fill="#91a9b8", font=("Segoe UI", 8))
@@ -1562,8 +1561,8 @@ class App(tk.Tk):
             f" | 扫频点 {point}/{len(self.sweep_frequencies)}" if point else ""
         )
         self.preview_text.set(
-            f"{frequency:.4f} Hz | {amplitude:.6g} Vpp | 5 周期 / {time_window:.6g} s | "
-            f"保存周期 2–4{progress}"
+            f"{frequency:.4f} Hz | {amplitude:.6g} Vpp | 7 周期 / {time_window:.6g} s | "
+            f"保存周期 2–6{progress}"
         )
 
     def quit_app(self):
