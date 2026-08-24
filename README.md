@@ -1,4 +1,4 @@
-# RIGOL MHO98 正弦波控制器
+# RIGOL MHO98 正弦波控制器V2.0
 
 <div align="center">
 
