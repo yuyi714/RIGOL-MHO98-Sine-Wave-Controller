@@ -2,3 +2,4 @@ pyvisa>=1.14
 pyvisa-py>=0.7
 numpy>=1.26
 matplotlib>=3.8
+pandas>=2.1
